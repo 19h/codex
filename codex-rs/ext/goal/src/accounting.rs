@@ -219,7 +219,7 @@ impl GoalAccountingState {
         self.inner().automatic_goal_turn_id = Some(turn_id);
     }
 
-    pub(crate) fn reset_empty_responses(&self) {
+    pub(crate) fn reset_continuation_failures(&self) {
         let mut inner = self.inner();
         inner.automatic_goal_turn_id = None;
         inner.consecutive_empty_turns = 0;

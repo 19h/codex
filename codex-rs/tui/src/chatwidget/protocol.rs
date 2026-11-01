@@ -529,10 +529,15 @@ impl ChatWidget {
                         && error.codex_error_info
                             == Some(AppServerCodexErrorInfo::MisalignmentPolicyViolation)
                     {
-                        self.on_misalignment_error(
-                            Some(notification.turn.id.clone()),
-                            error.misalignment,
-                        );
+                        if self.last_non_retry_error.as_ref()
+                            != Some(&(notification.turn.id.clone(), error.message.clone()))
+                            || self.has_misalignment_policy_violation()
+                        {
+                            self.on_misalignment_error(
+                                Some(notification.turn.id.clone()),
+                                error.misalignment,
+                            );
+                        }
                         self.last_non_retry_error = None;
                     } else if safety_recourse::render_failure(self, recourse, &error) {
                         self.last_non_retry_error = None;

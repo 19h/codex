@@ -871,6 +871,232 @@ async fn turn_error_blocks_goal() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn server_overloads_continue_active_goal_without_retry_limit() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    tool_by_name(&harness.tools(), "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "create",
+            json!({"objective": "Finish after capacity recovers"}),
+        ))
+        .await?;
+
+    for turn in 1..=8 {
+        let turn_id = format!("turn-{turn}");
+        if turn > 1 {
+            harness.start_turn(&turn_id, &TokenUsage::default()).await;
+        }
+        harness
+            .record_token_usage(&turn_id, &token_usage(10, 0, 5, 0, 15))
+            .await;
+        harness
+            .notify_turn_error(
+                &turn_id,
+                CodexErr::new(codex_protocol::error::CodexErrorDetails::ServerOverloaded),
+            )
+            .await;
+        harness.stop_turn(&turn_id).await;
+        let goal = runtime
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await?
+            .unwrap();
+        assert_eq!(goal.status, codex_state::ThreadGoalStatus::Active);
+        assert_eq!(goal.tokens_used, i64::from(turn) * 15);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_overload_continuation_respects_goal_budget() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    tool_by_name(&harness.tools(), "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "create",
+            json!({"objective": "Bounded work", "token_budget": 10}),
+        ))
+        .await?;
+    harness
+        .record_token_usage("turn-1", &token_usage(10, 0, 5, 0, 15))
+        .await;
+    harness
+        .notify_turn_error(
+            "turn-1",
+            CodexErr::new(codex_protocol::error::CodexErrorDetails::ServerOverloaded),
+        )
+        .await;
+    harness.stop_turn("turn-1").await;
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .unwrap();
+    assert_eq!(goal.status, codex_state::ThreadGoalStatus::BudgetLimited);
+    assert_eq!(goal.tokens_used, 15);
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_overload_does_not_reactivate_stopped_goals() -> anyhow::Result<()> {
+    for (status, expected) in [
+        ("paused", codex_state::ThreadGoalStatus::Paused),
+        ("complete", codex_state::ThreadGoalStatus::Complete),
+        ("blocked", codex_state::ThreadGoalStatus::Blocked),
+    ] {
+        let runtime = test_runtime().await?;
+        let thread_id = test_thread_id()?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+        harness.start_turn("turn-1", &TokenUsage::default()).await;
+        let tools = harness.tools();
+        tool_by_name(&tools, "create_goal")
+            .handle(tool_call(
+                "create_goal",
+                "create",
+                json!({"objective": "Respect stopped goals"}),
+            ))
+            .await?;
+        tool_by_name(&tools, "update_goal")
+            .handle(tool_call("update_goal", "stop", json!({"status": status})))
+            .await?;
+        harness
+            .notify_turn_error("turn-1", CodexErr::ServerOverloaded)
+            .await;
+        harness.stop_turn("turn-1").await;
+        let goal = runtime
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await?
+            .unwrap();
+        assert_eq!(goal.status, expected);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_errors_leave_goal_active_for_fresh_turns() -> anyhow::Result<()> {
+    use codex_protocol::error::CodexErrorDetails;
+
+    for code in [
+        "cyber_policy",
+        "bio_policy",
+        "misalignment_policy_violation",
+    ] {
+        let runtime = test_runtime().await?;
+        let thread_id = test_thread_id()?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+        harness.start_turn("turn-1", &TokenUsage::default()).await;
+        tool_by_name(&harness.tools(), "create_goal")
+            .handle(tool_call(
+                "create_goal",
+                "create",
+                json!({"objective": "test continuation"}),
+            ))
+            .await?;
+
+        // Passing the old three-refusal limit must not block the goal. Each
+        // terminal turn is accounted once, including duplicate error events.
+        for turn in 1..=5 {
+            let turn_id = format!("turn-{turn}");
+            if turn > 1 {
+                harness.start_turn(&turn_id, &TokenUsage::default()).await;
+            }
+            harness
+                .record_token_usage(&turn_id, &token_usage(10, 0, 5, 0, 15))
+                .await;
+            for _ in 0..2 {
+                let details = match code {
+                    "cyber_policy" => CodexErrorDetails::CyberPolicy {
+                        message: "rejected".into(),
+                    },
+                    "bio_policy" => CodexErrorDetails::BioPolicy {
+                        message: "rejected".into(),
+                    },
+                    _ => CodexErrorDetails::MisalignmentPolicyViolation {
+                        message: "rejected".into(),
+                        misalignment: None,
+                    },
+                };
+                harness
+                    .notify_turn_error(&turn_id, CodexErr::new(details))
+                    .await;
+            }
+            harness.stop_turn(&turn_id).await;
+            let goal = runtime
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await?
+                .unwrap();
+            assert_eq!(goal.tokens_used, i64::from(turn) * 15);
+            assert_eq!(goal.status, codex_state::ThreadGoalStatus::Active);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_error_continuation_respects_goal_budget() -> anyhow::Result<()> {
+    for code in [
+        "cyber_policy",
+        "bio_policy",
+        "misalignment_policy_violation",
+    ] {
+        let runtime = test_runtime().await?;
+        let thread_id = test_thread_id()?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+        harness.start_turn("turn-1", &TokenUsage::default()).await;
+        let tools = harness.tools();
+        tool_by_name(&tools, "create_goal")
+            .handle(tool_call(
+                "create_goal",
+                "create",
+                json!({"objective": "bounded continuation", "token_budget": 10}),
+            ))
+            .await?;
+        harness
+            .record_token_usage("turn-1", &token_usage(10, 0, 5, 0, 15))
+            .await;
+        harness
+            .notify_turn_error(
+                "turn-1",
+                CodexErr::new(match code {
+                    "cyber_policy" => codex_protocol::error::CodexErrorDetails::CyberPolicy {
+                        message: "rejected".into(),
+                    },
+                    "bio_policy" => codex_protocol::error::CodexErrorDetails::BioPolicy {
+                        message: "rejected".into(),
+                    },
+                    _ => codex_protocol::error::CodexErrorDetails::MisalignmentPolicyViolation {
+                        message: "rejected".into(),
+                        misalignment: None,
+                    },
+                }),
+            )
+            .await;
+        harness.stop_turn("turn-1").await;
+        let goal = runtime
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await?
+            .unwrap();
+        assert_eq!(goal.status, codex_state::ThreadGoalStatus::BudgetLimited);
+        assert_eq!(goal.tokens_used, 15);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn failed_execution_turns_block_goal_unless_a_tool_succeeds() -> anyhow::Result<()> {
     for (recovery_turn, status_only_turn, blocking_turn) in
         [(None, None, 3), (Some(2), None, 5), (None, Some(2), 4)]

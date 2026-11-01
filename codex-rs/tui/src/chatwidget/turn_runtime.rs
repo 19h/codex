@@ -438,6 +438,9 @@ impl ChatWidget {
     }
 
     pub(super) fn on_cyber_policy_error(&mut self) {
+        if self.show_active_goal_policy_continuation() {
+            return;
+        }
         let notice = self.cyber_policy_notice();
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
@@ -475,6 +478,28 @@ impl ChatWidget {
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    pub(super) fn show_active_goal_policy_continuation(&mut self) -> bool {
+        // The goal extension publishes terminal goal status before the error.
+        // A goal that is still active will use the normal idle continuation.
+        if self.thread_usage.replaying_turn_completion
+            || !self
+                .current_goal_status
+                .as_ref()
+                .is_some_and(GoalStatusState::is_active)
+        {
+            return false;
+        }
+        self.input_queue.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_info_message(
+            "Response rejected; starting a new turn for the active goal.".to_string(),
+            /*hint*/ None,
+        );
+        self.request_redraw();
+        self.maybe_send_next_queued_input();
+        true
     }
 
     pub(super) fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
@@ -556,11 +581,13 @@ impl ChatWidget {
         {
             self.on_cyber_policy_error();
         } else if is_bio_policy_error(&message) {
-            self.input_queue.submit_pending_steers_after_interrupt = false;
-            self.finalize_turn();
-            self.add_to_history(history_cell::new_safety_access_block_event());
-            self.request_redraw();
-            self.maybe_send_next_queued_input();
+            if !self.show_active_goal_policy_continuation() {
+                self.input_queue.submit_pending_steers_after_interrupt = false;
+                self.finalize_turn();
+                self.add_to_history(history_cell::new_safety_access_block_event());
+                self.request_redraw();
+                self.maybe_send_next_queued_input();
+            }
         } else if let Some(info) = codex_error_info
             .as_ref()
             .and_then(app_server_rate_limit_error_kind)

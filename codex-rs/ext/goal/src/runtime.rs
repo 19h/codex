@@ -10,6 +10,7 @@ use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ThreadGoal;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
@@ -166,7 +167,7 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
         // Invalidate the old turn before the persisted objective/status changes.
-        self.inner.accounting_state.reset_empty_responses();
+        self.inner.accounting_state.reset_continuation_failures();
 
         if let Some(turn_id) = self.inner.accounting_state.current_turn_id() {
             self.account_active_goal_progress(
@@ -197,7 +198,7 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        self.inner.accounting_state.reset_empty_responses();
+        self.inner.accounting_state.reset_continuation_failures();
         let replaced_existing_goal = previous_goal
             .as_ref()
             .is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
@@ -271,6 +272,55 @@ impl GoalRuntimeHandle {
     pub async fn usage_limit_active_goal_for_turn(&self, turn_id: &str) -> Result<(), String> {
         self.stop_active_goal_for_turn(turn_id, ActiveGoalStopReason::UsageLimit)
             .await
+    }
+
+    /// Keep an active goal eligible for idle continuation after a recoverable turn error.
+    /// The failed turn remains terminal. The idle scheduler starts a fresh goal turn,
+    /// using the same continuation path as an external goal resume.
+    pub(crate) async fn continue_after_recoverable_error(
+        &self,
+        turn_id: &str,
+        error: &CodexErrorInfo,
+    ) -> Result<bool, String> {
+        let event_name = match error {
+            CodexErrorInfo::ServerOverloaded => "server-overloaded",
+            CodexErrorInfo::CyberPolicy
+            | CodexErrorInfo::BioPolicy
+            | CodexErrorInfo::MisalignmentPolicyViolation => "policy-error",
+            _ => return Ok(false),
+        };
+        if !self.tools_available() {
+            return Ok(false);
+        }
+        let _goal_state_permit = self.goal_state_permit().await?;
+        let Some(goal_id) = self
+            .inner
+            .accounting_state
+            .current_active_goal_id_for_turn(turn_id)
+        else {
+            return Ok(false);
+        };
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            return Ok(false);
+        };
+        if goal.goal_id != goal_id || goal.status != codex_state::ThreadGoalStatus::Active {
+            return Ok(false);
+        }
+        self.account_active_goal_progress(
+            turn_id,
+            &format!("{turn_id}:{event_name}-progress"),
+            codex_state::GoalAccountingMode::ActiveOnly,
+            BudgetLimitedGoalDisposition::ClearActive,
+        )
+        .await?;
+        Ok(true)
     }
 
     /// Accounts the ending turn and stops its active goal after an error or repeated empty output.
