@@ -74,9 +74,14 @@ impl ChatWidget {
                 }
             }
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
-                self.set_token_info(Some(token_usage_info_from_app_server(
-                    notification.token_usage,
-                )));
+                let info = token_usage_info_from_app_server(notification.token_usage);
+                if !from_replay {
+                    self.note_model_response_completed(
+                        info.total_token_usage.output_tokens.max(0) as u64,
+                        info.last_token_usage.output_tokens.max(0) as u64,
+                    );
+                }
+                self.set_token_info(Some(info));
             }
             ServerNotification::ThreadNameUpdated(notification) => {
                 match ThreadId::from_string(&notification.thread_id) {
@@ -159,6 +164,9 @@ impl ChatWidget {
                             &notification.item_id,
                         ))
                 {
+                    if !from_replay {
+                        self.record_streamed_output(&notification.delta);
+                    }
                     self.on_keyed_agent_message_delta(
                         (notification.turn_id, notification.item_id),
                         notification.delta,
@@ -167,6 +175,9 @@ impl ChatWidget {
             }
             ServerNotification::PlanDelta(notification) => {
                 self.restore_realtime_transcripts_before_turn(&notification.turn_id);
+                if !from_replay {
+                    self.record_streamed_output(&notification.delta);
+                }
                 self.on_plan_delta(notification.delta);
             }
             ServerNotification::ReasoningSummaryTextDelta(notification) => {
@@ -176,17 +187,23 @@ impl ChatWidget {
                 ) && self.status_state.reasoning_item_id.as_deref()
                     == Some(&notification.item_id)
                 {
+                    if !from_replay && !self.config.show_raw_agent_reasoning {
+                        self.record_streamed_output(&notification.delta);
+                    }
                     self.on_agent_reasoning_delta(notification.delta);
                 }
             }
             ServerNotification::ReasoningTextDelta(notification) => {
-                if self.config.show_raw_agent_reasoning
-                    && !self.is_realtime_delegated_reasoning_item(
-                        &notification.turn_id,
-                        &notification.item_id,
-                    )
-                    && self.status_state.reasoning_item_id.as_deref() == Some(&notification.item_id)
+                let is_active_reasoning_item = !self.is_realtime_delegated_reasoning_item(
+                    &notification.turn_id,
+                    &notification.item_id,
+                ) && self.status_state.reasoning_item_id.as_deref()
+                    == Some(&notification.item_id);
+                if is_active_reasoning_item && !from_replay && self.config.show_raw_agent_reasoning
                 {
+                    self.record_streamed_output(&notification.delta);
+                }
+                if self.config.show_raw_agent_reasoning && is_active_reasoning_item {
                     self.on_agent_reasoning_delta(notification.delta);
                 }
             }
