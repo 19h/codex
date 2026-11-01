@@ -383,14 +383,14 @@ where
                 return;
             };
             if !runtime.is_enabled() {
-                runtime.accounting_state().reset_empty_responses();
+                runtime.accounting_state().reset_continuation_failures();
                 return;
             }
 
             let turn_id = input.turn_store.level_id();
             input.thread_store.remove::<TurnStartOptions>();
             if input.reason != codex_protocol::protocol::TurnAbortReason::Interrupted {
-                runtime.accounting_state().reset_empty_responses();
+                runtime.accounting_state().reset_continuation_failures();
             }
             if let Err(err) = runtime
                 .account_active_goal_progress(
@@ -425,6 +425,27 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+
+            if matches!(
+                input.error,
+                CodexErrorInfo::CyberPolicy
+                    | CodexErrorInfo::BioPolicy
+                    | CodexErrorInfo::MisalignmentPolicyViolation
+                    | CodexErrorInfo::ServerOverloaded
+            ) {
+                match runtime
+                    .continue_after_recoverable_error(input.turn_id, &input.error)
+                    .await
+                {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to continue goal after recoverable turn error: {err}"
+                        )
+                    }
+                }
+            }
 
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
@@ -621,6 +642,10 @@ pub fn install_with_backend<C>(
 ) where
     C: Send + Sync + 'static,
 {
+    let recovery = Arc::new(crate::turn_recovery::TurnRecovery::new(
+        state_dbs.clone(),
+        thread_manager.clone(),
+    ));
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
         analytics_events_client,
@@ -636,6 +661,10 @@ pub fn install_with_backend<C>(
     registry.token_usage_contributor(extension.clone());
     registry.tool_lifecycle_contributor(extension.clone());
     registry.tool_contributor(extension);
+    // Goal error handling runs first. Recovery never resumes a stopped goal or
+    // competes with the existing active-goal continuation.
+    registry.thread_lifecycle_contributor(recovery.clone());
+    registry.turn_lifecycle_contributor(recovery);
 }
 
 fn goal_runtime_handle(thread_store: &ExtensionData) -> Option<Arc<GoalRuntimeHandle>> {
