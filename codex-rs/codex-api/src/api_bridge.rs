@@ -181,34 +181,43 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                     });
                 }
 
+                if matches!(
+                    status,
+                    http::StatusCode::BAD_REQUEST | http::StatusCode::FORBIDDEN
+                ) && let Some(error) = provider_error
+                    && let Some(code @ (CYBER_POLICY_ERROR_CODE | BIO_POLICY_ERROR_CODE)) =
+                        error.get("code").and_then(Value::as_str)
+                {
+                    let fallback = if code == BIO_POLICY_ERROR_CODE {
+                        BIO_POLICY_FALLBACK_MESSAGE
+                    } else {
+                        CYBER_POLICY_FALLBACK_MESSAGE
+                    };
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .filter(|message| !message.trim().is_empty())
+                        .unwrap_or(fallback)
+                        .to_string();
+                    return CodexErr::new(if code == BIO_POLICY_ERROR_CODE {
+                        CodexErrorDetails::BioPolicy { message }
+                    } else {
+                        CodexErrorDetails::CyberPolicy { message }
+                    });
+                }
+
                 if status == http::StatusCode::BAD_REQUEST {
                     if let Some(error) = provider_error
-                        && let Some(
-                            code @ (CYBER_POLICY_ERROR_CODE
-                            | BIO_POLICY_ERROR_CODE
-                            | INVALID_PROMPT_ERROR_CODE),
-                        ) = error.get("code").and_then(Value::as_str)
+                        && error.get("code").and_then(Value::as_str)
+                            == Some(INVALID_PROMPT_ERROR_CODE)
                     {
-                        let fallback_message = if code == BIO_POLICY_ERROR_CODE {
-                            BIO_POLICY_FALLBACK_MESSAGE
-                        } else if code == INVALID_PROMPT_ERROR_CODE {
-                            INVALID_PROMPT_FALLBACK_MESSAGE
-                        } else {
-                            CYBER_POLICY_FALLBACK_MESSAGE
-                        };
                         let message = error
                             .get("message")
                             .and_then(Value::as_str)
                             .filter(|message| !message.trim().is_empty())
-                            .map(str::to_string)
-                            .unwrap_or_else(|| fallback_message.to_string());
-                        if code == BIO_POLICY_ERROR_CODE {
-                            CodexErr::new(CodexErrorDetails::BioPolicy { message })
-                        } else if code == INVALID_PROMPT_ERROR_CODE {
-                            CodexErr::new(CodexErrorDetails::InvalidPrompt { message })
-                        } else {
-                            CodexErr::new(CodexErrorDetails::CyberPolicy { message })
-                        }
+                            .unwrap_or(INVALID_PROMPT_FALLBACK_MESSAGE)
+                            .to_string();
+                        CodexErr::new(CodexErrorDetails::InvalidPrompt { message })
                     } else if body_text
                         .contains("The image data you provided does not represent a valid image")
                     {

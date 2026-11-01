@@ -71,6 +71,9 @@ impl ChatWidget {
         {
             return;
         }
+        if self.show_active_goal_policy_continuation() {
+            return;
+        }
         // Bound memory-only findings and newly submitted model input. Never truncate a steer.
         let missing_details = details.is_none();
         let details = details.filter(|details| {

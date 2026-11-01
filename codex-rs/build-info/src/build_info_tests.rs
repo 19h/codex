@@ -40,9 +40,9 @@ fn packaged_runtime_uses_manifest_version() {
     );
 }
 
-/// Unpackaged builds expose their stamped commit and structured source version.
+/// Unpackaged builds expose their stamped commit and compiled package version.
 #[test]
-fn unpackaged_runtime_uses_build_commit() {
+fn unpackaged_runtime_uses_compiled_version_and_commit() {
     let context = InstallContext::from_exe(
         cfg!(target_os = "macos"),
         /*current_exe*/ None,
@@ -52,16 +52,16 @@ fn unpackaged_runtime_uses_build_commit() {
     assert_eq!(
         BuildInfo::resolve(&context, BUILD_COMMIT),
         BuildInfo {
-            version: Version::new(0, 0, 0),
+            version: Version::parse(env!("CARGO_PKG_VERSION")).expect("valid Cargo version"),
             build_commit: BUILD_COMMIT.to_string(),
             target: Some(env!("CODEX_BUILD_TARGET").to_string()),
         },
     );
 }
 
-/// Older package layouts without release metadata retain their build identity.
+/// Older package layouts without release metadata use the compiled version.
 #[test]
-fn legacy_package_without_version_uses_build_commit() {
+fn legacy_package_without_version_uses_compiled_version() {
     let package = tempdir().expect("create runtime package");
     let bin_dir = package.path().join("bin");
     fs::create_dir(&bin_dir).expect("create runtime binary directory");
@@ -79,16 +79,16 @@ fn legacy_package_without_version_uses_build_commit() {
     assert_eq!(
         BuildInfo::resolve(&context, BUILD_COMMIT),
         BuildInfo {
-            version: Version::new(0, 0, 0),
+            version: Version::parse(env!("CARGO_PKG_VERSION")).expect("valid Cargo version"),
             build_commit: BUILD_COMMIT.to_string(),
             target: Some(env!("CODEX_BUILD_TARGET").to_string()),
         },
     );
 }
 
-/// Invalid package versions cannot override the executable's stamped commit.
+/// Invalid package versions cannot override the executable's compiled version.
 #[test]
-fn invalid_package_version_uses_build_commit() {
+fn invalid_package_version_uses_compiled_version() {
     let package = tempdir().expect("create runtime package");
     let bin_dir = package.path().join("bin");
     fs::create_dir(&bin_dir).expect("create runtime binary directory");
@@ -109,11 +109,41 @@ fn invalid_package_version_uses_build_commit() {
     assert_eq!(
         BuildInfo::resolve(&context, BUILD_COMMIT),
         BuildInfo {
-            version: Version::new(0, 0, 0),
+            version: Version::parse(env!("CARGO_PKG_VERSION")).expect("valid Cargo version"),
             build_commit: BUILD_COMMIT.to_string(),
             target: Some(env!("CODEX_BUILD_TARGET").to_string()),
         },
     );
+}
+
+#[test]
+fn versioned_builds_display_the_release_even_without_a_commit_stamp() {
+    for commit in ["dev", BUILD_COMMIT] {
+        let info = BuildInfo {
+            version: Version::parse("0.163.0-alpha.1").expect("valid release version"),
+            build_commit: commit.to_string(),
+            target: None,
+        };
+        assert_eq!(info.display_version(), "v0.163.0-alpha.1");
+        assert_eq!(info.to_string(), "0.163.0-alpha.1");
+        assert!(!info.is_source_build());
+    }
+}
+
+#[test]
+fn unversioned_builds_retain_their_commit_display() {
+    for (commit, display) in [
+        ("dev", "dev"),
+        (BUILD_COMMIT, "v0123456789abcdef0123456789abcdef01234567"),
+    ] {
+        let info = BuildInfo {
+            version: Version::new(0, 0, 0),
+            build_commit: commit.to_string(),
+            target: None,
+        };
+        assert_eq!(info.display_version(), display);
+        assert!(info.is_source_build());
+    }
 }
 
 /// Serializing build information preserves release version, commit, and target.
