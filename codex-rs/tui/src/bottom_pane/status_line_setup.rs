@@ -62,6 +62,10 @@ pub(crate) enum StatusLineItem {
     /// Model name with reasoning level and processing tier.
     ModelWithReasoning,
 
+    /// Average output throughput for the current model over the last 30 minutes.
+    #[strum(to_string = "throughput", serialize = "tps", serialize = "model-tps")]
+    Throughput,
+
     /// Current reasoning level.
     Reasoning,
 
@@ -219,6 +223,9 @@ impl StatusLineItem {
             }
             StatusLineItem::SessionId => "Current thread identifier (omitted until thread starts)",
             StatusLineItem::FastMode => "Effective processing tier for the current model",
+            StatusLineItem::Throughput => {
+                "Average model throughput over the last 30 minutes (omitted until measured)"
+            }
             StatusLineItem::Daybreak => "Whether Daybreak is enabled for this thread",
             StatusLineItem::RawOutput => "Whether raw scrollback mode is active",
             StatusLineItem::ThreadName => "Current thread name (omitted when unnamed)",
@@ -263,6 +270,7 @@ impl StatusLineItem {
             StatusLineItem::EstimatedThreadCost => StatusSurfacePreviewItem::EstimatedThreadCost,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
+            StatusLineItem::Throughput => StatusSurfacePreviewItem::Throughput,
             StatusLineItem::Daybreak => StatusSurfacePreviewItem::Daybreak,
             StatusLineItem::RawOutput => StatusSurfacePreviewItem::RawOutput,
             StatusLineItem::ThreadName => StatusSurfacePreviewItem::ThreadName,

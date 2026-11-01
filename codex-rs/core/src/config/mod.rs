@@ -856,7 +856,7 @@ pub struct Config {
     pub tui_alternate_screen: AltScreenMode,
     /// Ordered list of status line item identifiers for the TUI.
     ///
-    /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
+    /// When unset, the TUI defaults to: `model-with-reasoning`, `current-dir`, `throughput`, and `thread-name`.
     pub tui_status_line: Option<Vec<String>>,
 
     /// Whether to color status line items with colors from the active syntax theme.

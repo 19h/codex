@@ -4186,6 +4186,46 @@ async fn status_line_fast_mode_footer_snapshot() {
 }
 
 #[tokio::test]
+async fn status_line_throughput_renders_measured_model_average() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.local_settings.tui.status_line = Some(vec![
+        "model-with-reasoning".to_string(),
+        "throughput".to_string(),
+    ]);
+
+    chat.record_streamed_output("hello from the model");
+    tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 300)).await;
+    chat.note_model_response_completed(
+        /*total_output_tokens*/ 90, /*response_output_tokens*/ 90,
+    );
+
+    let text = status_line_text(&chat).expect("status line with throughput");
+    assert!(text.starts_with("gpt-5.2 "), "{text}");
+    assert!(text.contains(" · ~"), "{text}");
+    assert!(text.ends_with(" tps"), "{text}");
+}
+
+#[tokio::test]
+async fn status_line_throughput_is_omitted_until_a_response_completes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.local_settings.tui.status_line = Some(vec!["throughput".to_string()]);
+    chat.refresh_status_line();
+
+    assert_eq!(status_line_text(&chat), None);
+
+    chat.record_streamed_output("hello");
+    tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 300)).await;
+    chat.note_model_response_completed(
+        /*total_output_tokens*/ 30, /*response_output_tokens*/ 30,
+    );
+
+    assert!(
+        status_line_text(&chat).is_some_and(|text| text.ends_with(" tps")),
+        "expected measured throughput after a completed response"
+    );
+}
+
+#[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);

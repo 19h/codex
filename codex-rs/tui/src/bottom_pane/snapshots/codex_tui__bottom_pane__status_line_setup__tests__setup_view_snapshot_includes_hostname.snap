@@ -14,8 +14,8 @@ expression: "render_lines(&view,\n100).lines().map(str::trim_end).collect::<Vec<
   [x] current-dir           Current working directory
   [ ] model                 Current model name
   [ ] model-with-reasoning  Current model name with reasoning level
+  [ ] throughput            Average model throughput over the last 30 minutes (omitted until measur…
   [ ] reasoning             Current reasoning level
-  [ ] project-name          Project name (omitted when unavailable)
 ↓
   ssh-build-01.example.com · ~/codex-rs
   space toggle · ←/→ reorder · enter save · esc cancel

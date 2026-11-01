@@ -30,6 +30,7 @@ use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::capitalize_first;
+use crate::throughput::LiveOutputRate;
 use crate::tui::FrameRequester;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
@@ -62,6 +63,8 @@ pub(crate) struct StatusIndicatorWidget {
     inline_message: Option<String>,
     /// Hook activity may move below the status row when it cannot fit in full.
     hook_status_message: Option<String>,
+    /// Streamed output samples behind the live tokens-per-second estimate.
+    output_rate: LiveOutputRate,
     show_interrupt_hint: bool,
     interrupt_binding: Option<ShortcutHint>,
 
@@ -102,6 +105,7 @@ impl StatusIndicatorWidget {
             details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             inline_message: None,
             hook_status_message: None,
+            output_rate: LiveOutputRate::default(),
             show_interrupt_hint: true,
             interrupt_binding: Some(key_hint::plain(KeyCode::Esc).into()),
             app_event_tx,
@@ -160,6 +164,15 @@ impl StatusIndicatorWidget {
 
     pub(crate) fn update_hook_status_message(&mut self, message: Option<String>) {
         self.hook_status_message = message;
+    }
+
+    /// Records streamed output characters for the live throughput estimate.
+    pub(crate) fn record_output_delta(&mut self, chars: usize) {
+        self.output_rate.record_delta(chars, Instant::now());
+    }
+
+    pub(crate) fn reset_output_rate(&mut self) {
+        self.output_rate.reset();
     }
 
     pub(crate) fn header(&self) -> &str {
@@ -263,6 +276,10 @@ impl StatusIndicator<'_> {
         } else {
             spans.push(format!("({pretty_elapsed})").dim());
         }
+        if let Some(tps) = row.output_rate.tokens_per_second(now) {
+            spans.push(" · ".dim());
+            spans.push(format!("~{tps} tps").dim());
+        }
         if let Some(message) = &row.inline_message {
             // Keep optional context after elapsed/interrupt text so that core
             // interrupt affordances stay in a fixed visual location.
@@ -304,7 +321,15 @@ impl Renderable for StatusIndicator<'_> {
         if area.is_empty() {
             return;
         }
-        if self.row.animations_enabled || self.timer.display_started_at.is_some() {
+        let live_rate_active = self
+            .row
+            .output_rate
+            .tokens_per_second(Instant::now())
+            .is_some();
+        if self.row.animations_enabled
+            || self.timer.display_started_at.is_some()
+            || live_rate_active
+        {
             let interval_ms = if self.row.animations_enabled
                 && (self.row.effects.progress || self.row.effects.shimmer)
             {
@@ -380,6 +405,32 @@ mod tests {
             .draw(|f| w.with_timer(&timer).render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_live_throughput_next_to_elapsed_time() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut w = StatusIndicatorWidget::new(
+            AppEventSender::new(tx_raw),
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ false,
+            Default::default(),
+        );
+        let now = Instant::now();
+        w.output_rate
+            .record_delta(/*chars*/ 160, now - Duration::from_secs(/*secs*/ 1));
+        let timer = StatusTimer::default();
+
+        let indicator = StatusIndicator {
+            row: &w,
+            timer: &timer,
+        };
+        let text = indicator.lines(/*width*/ 80)[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("~40 tps"), "expected live throughput: {text}");
     }
 
     #[test]

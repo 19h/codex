@@ -238,6 +238,7 @@ mod text_selection;
 mod theme_picker;
 mod thread_color;
 mod thread_transcript;
+mod throughput;
 mod token_usage;
 mod tool_output;
 mod tooltips;
