@@ -14,8 +14,10 @@
 #   make build PKG=codex-tui       # build specific packages instead
 #   make test PKG="codex-core codex-tui"
 #   make run ARGS="exec 'say hi'"  # run the codex CLI
-#   make install                   # release build into ~/local/bin
+#   make install                   # release build into ~/local/bin + app-server daemon
 #   make install VERSION=0.164.0   # override the local build version
+#   make install DAEMON=0          # leave the app-server daemon alone
+#   make install-daemon            # hand the last release build to the daemon
 
 ROOT        := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 CARGO_DIR   := $(ROOT)/codex-rs
@@ -32,6 +34,17 @@ BINDIR      ?= $(PREFIX)/bin
 # codex looks for codex-code-mode-host next to its own executable when it is
 # not running from a packaged install, so the two are installed side by side.
 INSTALL_BINS := codex codex-code-mode-host
+
+# The app-server daemon runs its own copy of codex from a package under
+# CODEX_HOME. `install-daemon` stages the release build as a package and lets
+# `codex app-server daemon update --from-cli` copy it into a fresh release
+# directory, pin it, and restart a running daemon with its saved settings.
+# Never copy over the daemon's binaries in place: macOS caches code signatures
+# per inode and SIGKILLs the rewritten executable at launch.
+CODEX_HOME  ?= $(HOME)/.codex
+DAEMON      ?= 1
+DAEMON_ROOT := $(CODEX_HOME)/packages/app-server-daemon
+PACKAGE_DIR := $(TARGET_DIR)/release/codex-package
 
 CARGO_CMD   := cd "$(CARGO_DIR)" && $(CARGO)
 HOST_TRIPLE ?= $(shell cd "$(CARGO_DIR)" && rustc -vV | sed -n 's/^host: //p')
@@ -59,12 +72,12 @@ export RUSTY_V8_ARCHIVE          := $(V8_DIR)/$(V8_ARCHIVE_NAME)
 export RUSTY_V8_SRC_BINDING_PATH := $(V8_DIR)/$(V8_BINDING_NAME)
 
 .DEFAULT_GOAL := help
-.PHONY: help version build release codex run install uninstall check test clippy fix fmt fmt-check clean clean-v8 distclean v8
+.PHONY: help version build release codex run install install-daemon uninstall check test clippy fix fmt fmt-check clean clean-v8 distclean v8
 
 help: ## Show this help
 	@echo "Usage: make <target> [VERSION=$(VERSION)] [PKG=<crate>...] [CARGO_FLAGS=...] [ARGS=...]"
 	@echo
-	@awk 'BEGIN { FS = ":.*## " } /^[a-z0-9-]+:.*## / { printf "  %-10s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@awk 'BEGIN { FS = ":.*## " } /^[a-z0-9-]+:.*## / { printf "  %-15s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # Cargo supplies CARGO_PKG_VERSION itself; exporting an environment variable
 # cannot override it. Stamp the shared manifest before any compilation. Cargo
@@ -86,10 +99,41 @@ codex: v8 ## Build only the codex CLI binary
 run: v8 ## Run the codex CLI with ARGS
 	$(CARGO_CMD) run --bin codex $(CARGO_FLAGS) -- $(ARGS)
 
-install: v8 ## Release-build codex and copy it to BINDIR (~/local/bin)
+install: v8 ## Release-build codex into BINDIR and the app-server daemon (DAEMON=0 skips it)
 	$(CARGO_CMD) build --release $(foreach b,$(INSTALL_BINS),--bin $(b)) $(CARGO_FLAGS)
 	mkdir -p "$(BINDIR)"
 	install -m 755 $(foreach b,$(INSTALL_BINS),"$(TARGET_DIR)/release/$(b)") "$(BINDIR)/"
+ifneq ($(DAEMON),0)
+	@$(MAKE) --no-print-directory install-daemon
+endif
+
+# The package version comes from the binary itself so this also works without
+# repeating VERSION. ripgrep is reused from the daemon's current package.
+install-daemon: ## Select the last release build for the app-server daemon (restarts it)
+	@set -e; \
+	if [ ! -e "$(DAEMON_ROOT)/current" ]; then \
+	  echo "No app-server daemon package in $(DAEMON_ROOT); skipping daemon install"; \
+	  exit 0; \
+	fi; \
+	for b in $(INSTALL_BINS); do \
+	  if [ ! -x "$(TARGET_DIR)/release/$$b" ]; then \
+	    echo "error: $(TARGET_DIR)/release/$$b is missing; run make install" >&2; exit 1; \
+	  fi; \
+	done; \
+	rg="$(DAEMON_ROOT)/current/codex-path/rg"; \
+	[ -x "$$rg" ] || rg="$$(command -v rg || true)"; \
+	if [ -z "$$rg" ]; then \
+	  echo "error: the daemon package needs ripgrep (rg)" >&2; exit 1; \
+	fi; \
+	version="$$("$(TARGET_DIR)/release/codex" --version | awk '{ print $$NF }')"; \
+	rm -rf "$(PACKAGE_DIR)"; \
+	mkdir -p "$(PACKAGE_DIR)/bin" "$(PACKAGE_DIR)/codex-path"; \
+	install -m 755 $(foreach b,$(INSTALL_BINS),"$(TARGET_DIR)/release/$(b)") "$(PACKAGE_DIR)/bin/"; \
+	install -m 755 "$$rg" "$(PACKAGE_DIR)/codex-path/rg"; \
+	printf '{\n  "layoutVersion": 1,\n  "version": "%s",\n  "target": "%s",\n  "variant": "codex",\n  "entrypoint": "bin/codex",\n  "pathDir": "codex-path"\n}\n' \
+	  "$$version" "$(HOST_TRIPLE)" > "$(PACKAGE_DIR)/codex-package.json"; \
+	echo "Selecting codex $$version for the app-server daemon"; \
+	CODEX_HOME="$(CODEX_HOME)" "$(PACKAGE_DIR)/bin/codex" app-server daemon update --from-cli --yes
 
 uninstall: ## Remove the installed codex binaries from BINDIR
 	rm -f $(foreach b,$(INSTALL_BINS),"$(BINDIR)/$(b)")
