@@ -13,8 +13,8 @@ expression: status_line_popup_snapshot(&mut chat)
   [x] weekly-limit          Remaining usage on the weekly usage limit (omitted when unavailable)
   [ ] model                 Current model name
   [ ] model-with-reasoning  Current model name with reasoning level
+  [ ] throughput            Average model throughput over the last 30 minutes (omitted until measur…
   [ ] reasoning             Current reasoning level
-  [ ] current-dir           Current working directory
 ↓
   monthly 65% left · weekly 50% left
   space toggle · ←/→ reorder · enter save · esc cancel
