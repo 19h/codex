@@ -120,7 +120,7 @@ fn empty_continuations_require_three_turns_without_activity_or_goal_changes() {
                 );
             }
             if turn == 3 && interruption == "reset" {
-                state.reset_empty_responses();
+                state.reset_continuation_failures();
             }
             assert_eq!(
                 (turn == blocking_turn).then(|| goal_id.to_string()),

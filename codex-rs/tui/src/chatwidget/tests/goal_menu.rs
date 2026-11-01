@@ -1,6 +1,144 @@
 use super::*;
 
 #[tokio::test]
+async fn active_goal_policy_error_shows_continuation_instead_of_block_notice() {
+    for (status, replay, continuing) in [
+        (AppThreadGoalStatus::Active, false, true),
+        (AppThreadGoalStatus::Blocked, false, false),
+        (AppThreadGoalStatus::Paused, false, false),
+        (AppThreadGoalStatus::BudgetLimited, false, false),
+        (AppThreadGoalStatus::Active, true, false),
+    ] {
+        for (message, info) in [
+            (
+                "This content was flagged for possible biological risk.",
+                None,
+            ),
+            ("rejected", Some(AppServerCodexErrorInfo::CyberPolicy)),
+        ] {
+            let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+            let thread_id = ThreadId::new();
+            chat.current_goal_status = Some(super::super::goal_status::GoalStatusState::new(
+                test_goal(thread_id, status, None),
+                Instant::now(),
+            ));
+            chat.thread_usage.replaying_turn_completion = replay;
+            chat.handle_non_retry_error(message.into(), info);
+            let rendered = rendered_goal_summary(&mut rx);
+            assert_eq!(
+                rendered.contains("starting a new turn for the active goal"),
+                continuing
+            );
+            assert_eq!(rendered.contains("This content"), !continuing);
+        }
+    }
+}
+
+#[tokio::test]
+async fn active_goal_policy_error_with_recourse_waits_for_fresh_turn() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    handle_turn_started(&mut chat, "rejected-turn");
+    chat.current_goal_status = Some(super::super::goal_status::GoalStatusState::new(
+        test_goal(thread_id, AppThreadGoalStatus::Active, None),
+        Instant::now(),
+    ));
+    safety_recourse::on_metadata(
+        &mut chat,
+        codex_app_server_protocol::TurnModerationMetadataNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "rejected-turn".into(),
+            metadata: json!({"safety_recourse": {
+                "schema_version": 1, "domain": "cyber", "source": "user_request",
+                "source_message": {"id": "1", "kind": "ordinary_message", "role": "user"},
+                "topic": "unauthorized_account_or_system_access",
+                "suggestions": [
+                    {"label": "Overview", "prompt_text": "Explain access"},
+                    {"label": "Recovery", "prompt_text": "Explain account recovery"},
+                    {"label": "Prevention", "prompt_text": "Explain account protection"},
+                ],
+            }}),
+        },
+    );
+    assert!(chat.safety_recourse.is_some());
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: app_server_turn(
+                "rejected-turn",
+                AppServerTurnStatus::Failed,
+                None,
+                Some(AppServerTurnError {
+                    misalignment: None,
+                    message: "response rejected".into(),
+                    codex_error_info: Some(AppServerCodexErrorInfo::CyberPolicy),
+                    additional_details: None,
+                }),
+            ),
+        }),
+        None,
+    );
+    assert!(rendered_goal_summary(&mut rx).contains("starting a new turn for the active goal"));
+    assert!(!chat.bottom_pane.has_active_view());
+    assert!(chat.bottom_pane.composer_input_enabled());
+}
+
+#[tokio::test]
+async fn active_goal_misalignment_error_waits_for_fresh_turn_without_locking_input() {
+    for status in [
+        AppThreadGoalStatus::Active,
+        AppThreadGoalStatus::Blocked,
+        AppThreadGoalStatus::Paused,
+        AppThreadGoalStatus::BudgetLimited,
+        AppThreadGoalStatus::Complete,
+    ] {
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+        handle_turn_started(&mut chat, "rejected-turn");
+        chat.current_goal_status = Some(super::super::goal_status::GoalStatusState::new(
+            test_goal(thread_id, status, None),
+            Instant::now(),
+        ));
+        handle_error(
+            &mut chat,
+            "response rejected",
+            Some(CodexErrorInfo::MisalignmentPolicyViolation),
+        );
+        let continuing = status == AppThreadGoalStatus::Active;
+        assert_eq!(chat.has_misalignment_policy_violation(), !continuing);
+        assert_eq!(chat.bottom_pane.composer_input_enabled(), continuing);
+        assert_eq!(
+            rendered_goal_summary(&mut rx).contains("starting a new turn for the active goal"),
+            continuing,
+        );
+
+        chat.handle_server_notification(
+            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: thread_id.to_string(),
+                turn: app_server_turn(
+                    "rejected-turn",
+                    AppServerTurnStatus::Failed,
+                    None,
+                    Some(AppServerTurnError {
+                        misalignment: None,
+                        message: "response rejected".to_string(),
+                        codex_error_info: Some(
+                            AppServerCodexErrorInfo::MisalignmentPolicyViolation,
+                        ),
+                        additional_details: None,
+                    }),
+                ),
+            }),
+            None,
+        );
+        assert_eq!(chat.has_misalignment_policy_violation(), !continuing);
+        assert!(!rendered_goal_summary(&mut rx).contains("starting a new turn"));
+    }
+}
+
+#[tokio::test]
 async fn goal_menu_active_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
