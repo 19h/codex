@@ -80,7 +80,13 @@ pub(super) fn render_failure(
     let Some(result) = pending.result else {
         return false;
     };
-    if chat.has_queued_follow_up_messages() || !matches_error(pending.domain, error) {
+    if chat
+        .current_goal_status
+        .as_ref()
+        .is_some_and(GoalStatusState::is_active)
+        || chat.has_queued_follow_up_messages()
+        || !matches_error(pending.domain, error)
+    {
         return false;
     }
     let (Some(thread_id), Some(turn_id)) = (chat.thread_id(), chat.last_turn_id()) else {

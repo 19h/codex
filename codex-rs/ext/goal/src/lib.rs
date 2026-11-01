@@ -10,6 +10,7 @@ mod runtime;
 mod spec;
 mod steering;
 mod tool;
+mod turn_recovery;
 
 pub use api::GoalObjectiveUpdate;
 pub use api::GoalService;

@@ -9,6 +9,29 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 pub(super) struct RecordedTurnInput;
 
 impl Session {
+    pub(crate) async fn active_turn_start_options(
+        &self,
+        expected_turn_id: &str,
+    ) -> Option<crate::TurnStartOptions> {
+        let active = self.active_turn.lock().await;
+        let task = active.as_ref()?.task.as_ref()?;
+        if task.turn_context.sub_id != expected_turn_id || task.cancellation_token.is_cancelled() {
+            return None;
+        }
+        let context = &task.turn_context;
+        let settings = context.next_step_settings.load();
+        Some(crate::TurnStartOptions {
+            final_output_json_schema: context.final_output_json_schema.clone(),
+            service_tier: Some(settings.service_tier.clone().unwrap_or_else(|| {
+                codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()
+            })),
+            cyber_access_program: context.cyber_access_program,
+            root_turn_id: Some(context.root_turn_id()),
+            parent_turn_id: Some(expected_turn_id.to_string()),
+            ..Default::default()
+        })
+    }
+
     pub(crate) async fn recovered_turn_start_options(
         &self,
         turn_id: &str,
