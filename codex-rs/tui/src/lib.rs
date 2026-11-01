@@ -258,6 +258,7 @@ mod thread_color;
 mod thread_label;
 mod thread_links;
 mod thread_transcript;
+mod throughput;
 mod token_usage;
 mod tool_output;
 mod tooltips;

@@ -170,6 +170,7 @@ impl ChatWidget {
             windows_sandbox_elevated_setup_complete: false,
             token_info: None,
             token_usage_pending: false,
+            throughput: Default::default(),
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             inherited_quota_provider: None,
             refreshing_status_outputs: Vec::new(),
