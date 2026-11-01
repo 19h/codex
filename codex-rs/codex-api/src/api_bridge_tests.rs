@@ -247,6 +247,34 @@ fn map_api_error_maps_cloudflare_blocked_response_to_user_message() {
 }
 
 #[test]
+fn http_content_policy_errors_remain_typed_and_terminal_for_400_and_403() {
+    for status in [http::StatusCode::BAD_REQUEST, http::StatusCode::FORBIDDEN] {
+        for (code, expected) in [
+            ("cyber_policy", CodexErrorInfo::CyberPolicy),
+            ("bio_policy", CodexErrorInfo::BioPolicy),
+        ] {
+            let error = map_api_error(ApiError::Transport(TransportError::Http {
+                status,
+                url: None,
+                headers: None,
+                body: Some(
+                    serde_json::json!({"error": {
+                        "code": code, "message": "response rejected",
+                    }})
+                    .to_string(),
+                ),
+                retry_after: None,
+            }));
+            assert_eq!(error.to_codex_protocol_error(), expected);
+            assert_eq!(error.to_string(), "response rejected");
+            // Fresh goal turns are scheduled by the host; the rejected
+            // response itself remains non-retryable.
+            assert_eq!(error.retry_delay(/*retry_count*/ 1), None);
+        }
+    }
+}
+
+#[test]
 fn map_api_error_maps_cyber_policy_from_400_body() {
     let body = serde_json::json!({
         "error": {
