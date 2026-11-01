@@ -730,6 +730,18 @@ impl BottomPane {
 
     pub(crate) fn reset_status_timer(&mut self, elapsed: Duration) {
         self.status_timer.reset(elapsed);
+        if let Some(status) = self.status.as_mut() {
+            status.reset_output_rate();
+        }
+    }
+
+    /// Records streamed model-output characters for the live throughput
+    /// estimate shown next to the working timer.
+    pub(crate) fn record_output_delta(&mut self, chars: usize) {
+        if let Some(status) = self.status.as_mut() {
+            status.record_output_delta(chars);
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn set_status_timer_origin(&mut self, started_at: Option<Instant>) {
