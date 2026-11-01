@@ -1030,6 +1030,17 @@ impl CodexThread {
         task.turn_context.extension_data.get()
     }
 
+    /// Captures start-only settings for continuation of the named running turn.
+    /// Returns `None` if the turn has finished, changed, or been cancelled.
+    pub async fn active_turn_start_options(
+        &self,
+        expected_turn_id: &str,
+    ) -> Option<TurnStartOptions> {
+        self.session
+            .active_turn_start_options(expected_turn_id)
+            .await
+    }
+
     pub async fn set_app_server_client_info(
         &self,
         app_server_client_name: Option<String>,
