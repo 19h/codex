@@ -34,7 +34,7 @@ const MIN_SAMPLE_DURATION: Duration = Duration::from_millis(250);
 /// Tracks streamed output so the status row can display a live tokens/second
 /// estimate. Samples age out of a short sliding window, so the estimate
 /// disappears when the model stops emitting.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct LiveOutputRate {
     samples: VecDeque<(Instant, f64)>,
 }
