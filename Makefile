@@ -15,7 +15,7 @@
 #   make test PKG="codex-core codex-tui"
 #   make run ARGS="exec 'say hi'"  # run the codex CLI
 #   make install                   # release build into ~/local/bin + app-server daemon
-#   make install VERSION=0.164.0   # override the local build version
+#   make install VERSION=0.164.0   # override the local build version (defaults to Cargo.toml)
 #   make install DAEMON=0          # leave the app-server daemon alone
 #   make install-daemon            # hand the last release build to the daemon
 
@@ -24,7 +24,9 @@ CARGO_DIR   := $(ROOT)/codex-rs
 TARGET_DIR  := $(or $(CARGO_TARGET_DIR),$(CARGO_DIR)/target)
 CARGO       ?= cargo
 CARGO_FLAGS ?=
-VERSION     ?= 0.163.0
+# Default to the version already in the workspace rather than a hard-coded one,
+# so a plain `make install` never silently downgrades (and rebuilds) the tree.
+VERSION     ?= $(shell awk '/^\[workspace.package\]/ { in_package = 1; next } in_package && /^version = / { gsub(/"/, "", $$3); print $$3; exit }' "$(CARGO_DIR)/Cargo.toml")
 PYTHON      ?= python3
 ARGS        ?=
 PKG         ?=
@@ -82,7 +84,7 @@ help: ## Show this help
 # Cargo supplies CARGO_PKG_VERSION itself; exporting an environment variable
 # cannot override it. Stamp the shared manifest before any compilation. Cargo
 # updates the workspace entries in Cargo.lock to match during the build.
-version: ## Set the workspace version (default 0.163.0; edits Cargo.toml)
+version: ## Set the workspace version (defaults to the current Cargo.toml version)
 	$(PYTHON) "$(ROOT)/scripts/set-build-version.py" "$(CARGO_DIR)/Cargo.toml" "$(VERSION)"
 
 build release codex run install check test clippy fix: version
