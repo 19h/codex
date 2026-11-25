@@ -121,14 +121,10 @@ async fn resumed_session_hides_unknown_token_usage_until_an_update_arrives() {
 }
 
 #[tokio::test]
-async fn app_server_cyber_policy_error_renders_dedicated_notice() {
+async fn cyber_policy_error_renders_dedicated_notice() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(Some("gpt-5.6-sol")).await;
 
-    handle_error(
-        &mut chat,
-        "server fallback message",
-        Some(CodexErrorInfo::CyberPolicy),
-    );
+    chat.show_cyber_policy_error();
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
@@ -160,20 +156,20 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     set_test_model_catalog(&mut chat, vec![model]);
 
     chat.thread_usage.replaying_turn_completion = true;
-    chat.on_cyber_policy_error();
+    chat.show_cyber_policy_error();
     let cells = drain_insert_history(&mut events);
     assert!(lines_to_single_string(&cells[0]).contains("Daybreak is currently off"));
     assert!(chat.bottom_pane.no_modal_or_popup_active());
     chat.thread_usage.replaying_turn_completion = false;
 
     chat.daybreak_enabled = true;
-    chat.on_cyber_policy_error();
+    chat.show_cyber_policy_error();
     let cells = drain_insert_history(&mut events);
     assert!(lines_to_single_string(&cells[0]).contains("even when Daybreak is on"));
     assert!(chat.bottom_pane.no_modal_or_popup_active());
     chat.daybreak_enabled = false;
 
-    chat.on_cyber_policy_error();
+    chat.show_cyber_policy_error();
     assert_chatwidget_snapshot!(
         "daybreak_refusal_enable_picker",
         render_bottom_popup(&chat, /*width*/ 80)
@@ -223,7 +219,9 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
             },
         );
         let pending = chat.safety_recourse.take();
-        assert!(safety_recourse::render_failure(&mut chat, pending, &error));
+        assert!(safety_recourse::render_failure_notice(
+            &mut chat, pending, &error
+        ));
         let picker = render_bottom_popup(&chat, /*width*/ 80);
         assert!(picker.contains("Prevention"));
         assert_eq!(picker.contains("3. Prevention"), eligible);
@@ -287,7 +285,9 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     assert!(chat.daybreak_account_eligible());
     assert!(chat.daybreak_enabled);
     assert_eq!(chat.cyber_policy_notice(), crate::daybreak::Notice::Enabled);
-    assert!(safety_recourse::render_failure(&mut chat, pending, &error));
+    assert!(safety_recourse::render_failure_notice(
+        &mut chat, pending, &error
+    ));
     let cells = drain_insert_history(&mut events);
     let notices = cells
         .iter()
@@ -331,7 +331,9 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
         },
     );
     let pending = chat.safety_recourse.take();
-    assert!(safety_recourse::render_failure(&mut chat, pending, &error));
+    assert!(safety_recourse::render_failure_notice(
+        &mut chat, pending, &error
+    ));
     let cells = drain_insert_history(&mut events);
     let notices = cells
         .iter()
@@ -352,11 +354,7 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     chat.set_model("gpt-5.6-sol");
     chat.daybreak_enabled = false;
     chat.set_parent_owned_thread();
-    handle_error(
-        &mut chat,
-        "server fallback message",
-        Some(CodexErrorInfo::CyberPolicy),
-    );
+    chat.show_cyber_policy_error();
     let cells = drain_insert_history(&mut events);
     assert!(chat.bottom_pane.no_modal_or_popup_active());
     assert_chatwidget_snapshot!(

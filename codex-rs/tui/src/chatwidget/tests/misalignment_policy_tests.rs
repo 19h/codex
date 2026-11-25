@@ -2,8 +2,6 @@ use super::*;
 use crate::chatwidget::realtime::tests::activate_voice_for_thread;
 use pretty_assertions::assert_eq;
 
-const ERROR_MESSAGE: &str = "Responses API returned misalignment_policy_violation";
-
 #[tokio::test]
 async fn misalignment_precaution_retires_voice_and_keeps_late_turn_blocked() {
     let (mut chat, _events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -12,11 +10,7 @@ async fn misalignment_precaution_retires_voice_and_keeps_late_turn_blocked() {
     handle_turn_started(&mut chat, "unsafe-turn");
     activate_voice_for_thread(&mut chat, thread_id);
 
-    handle_error(
-        &mut chat,
-        ERROR_MESSAGE,
-        Some(CodexErrorInfo::MisalignmentPolicyViolation),
-    );
+    chat.on_misalignment_error(Some("unsafe-turn".to_string()), None);
 
     assert!(!chat.realtime_conversation_is_running());
     assert_matches!(
@@ -83,11 +77,7 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
     drain_insert_history(&mut rx);
 
-    handle_error(
-        &mut chat,
-        ERROR_MESSAGE,
-        Some(CodexErrorInfo::MisalignmentPolicyViolation),
-    );
+    chat.on_misalignment_error(Some("turn-1".to_string()), None);
 
     assert!(!chat.bottom_pane.is_task_running());
     assert!(!chat.bottom_pane.composer_input_enabled());
@@ -124,23 +114,7 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
         /*replay_kind*/ None,
     );
 
-    chat.handle_server_notification(
-        ServerNotification::TurnCompleted(TurnCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn: app_server_turn(
-                "turn-1",
-                AppServerTurnStatus::Failed,
-                /*duration_ms*/ None,
-                Some(AppServerTurnError {
-                    misalignment: None,
-                    message: ERROR_MESSAGE.to_string(),
-                    codex_error_info: Some(CodexErrorInfo::MisalignmentPolicyViolation),
-                    additional_details: None,
-                }),
-            ),
-        }),
-        /*replay_kind*/ None,
-    );
+    chat.on_misalignment_error(Some("turn-1".to_string()), None);
 
     assert_eq!(render_bottom_popup(&chat, /*width*/ 80), popup);
     assert!(drain_insert_history(&mut rx).is_empty());
@@ -192,23 +166,8 @@ async fn misalignment_turn_end_discards_history_search_and_question_drafts() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
 
-    chat.handle_server_notification(
-        ServerNotification::TurnCompleted(TurnCompletedNotification {
-            thread_id: thread_id.to_string(),
-            turn: app_server_turn(
-                "turn",
-                AppServerTurnStatus::Failed,
-                /*duration_ms*/ None,
-                Some(AppServerTurnError {
-                    misalignment: Some(review_details()),
-                    message: ERROR_MESSAGE.into(),
-                    codex_error_info: Some(CodexErrorInfo::MisalignmentPolicyViolation),
-                    additional_details: None,
-                }),
-            ),
-        }),
-        /*replay_kind*/ None,
-    );
+    let _ = chat.take_question_drafts();
+    chat.on_misalignment_error(Some("turn".to_string()), Some(review_details()));
 
     assert_eq!(chat.capture_thread_input_state().unwrap().composer, None);
     assert_eq!(chat.bottom_pane.question_editor().unanswered_count(), 0);

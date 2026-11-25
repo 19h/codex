@@ -31,9 +31,10 @@ use codex_state::ThreadGoalStatus;
 use crate::GoalRuntimeHandle;
 
 const RECOVERY_TRIGGER: &str = "turn_recovery";
-const RECOVERY_PROMPT: &str = "The previous turn ended because the server was overloaded. Continue only \
-unfinished work under the existing instructions and permissions. Do not repeat completed \
-actions or reopen a completed goal. If no unfinished work remains, report completion and stop.";
+const RECOVERY_PROMPT: &str = "The previous turn ended with a response error. Retry the request \
+in a new turn under the existing instructions and permissions. Continue only unfinished work, \
+without repeating completed actions or reopening a completed goal. If no unfinished work remains, \
+report completion and stop.";
 
 pub(crate) struct TurnRecovery {
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -55,7 +56,10 @@ struct PendingRecovery {
 #[derive(PartialEq, Eq)]
 enum RecoveryGoal {
     Absent,
-    Complete(String),
+    Inactive {
+        goal_id: String,
+        status: ThreadGoalStatus,
+    },
 }
 
 type ThreadRecoveryState = Mutex<RecoveryState>;
@@ -80,10 +84,11 @@ impl TurnRecovery {
             .map_err(|err| err.to_string())?;
         Ok(match goal {
             None => Some(RecoveryGoal::Absent),
-            Some(goal) if goal.status == ThreadGoalStatus::Complete => {
-                Some(RecoveryGoal::Complete(goal.goal_id))
-            }
-            Some(_) => None,
+            Some(goal) if goal.status == ThreadGoalStatus::Active => None,
+            Some(goal) => Some(RecoveryGoal::Inactive {
+                goal_id: goal.goal_id,
+                status: goal.status,
+            }),
         })
     }
 }
@@ -213,7 +218,13 @@ impl TurnLifecycleContributor for TurnRecovery {
             let Some(state) = input.thread_store.get::<ThreadRecoveryState>() else {
                 return;
             };
-            if !matches!(input.error, CodexErrorInfo::ServerOverloaded) {
+            if !matches!(
+                input.error,
+                CodexErrorInfo::CyberPolicy
+                    | CodexErrorInfo::BioPolicy
+                    | CodexErrorInfo::MisalignmentPolicyViolation
+                    | CodexErrorInfo::ServerOverloaded
+            ) {
                 let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
                 if state.turn_id.as_deref() == Some(input.turn_id) {
                     // A later duplicate/recoverable notification cannot undo a

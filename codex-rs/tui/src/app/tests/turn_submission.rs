@@ -348,7 +348,7 @@ async fn misalignment_policy_blocks_queued_turns_and_goal_resumption() -> Result
 }
 
 #[tokio::test]
-async fn misalignment_policy_in_parent_stops_active_side_conversation() -> Result<()> {
+async fn misalignment_policy_in_parent_retries_and_stops_active_side_conversation() -> Result<()> {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let parent_thread_id = ThreadId::new();
     let side_thread_id = ThreadId::new();
@@ -382,9 +382,9 @@ async fn misalignment_policy_in_parent_stops_active_side_conversation() -> Resul
     )
     .await?;
 
-    assert!(app.chat_widget.has_misalignment_policy_violation());
+    assert!(!app.chat_widget.has_misalignment_policy_violation());
     assert!(
-        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        !render_bottom_popup(&app.chat_widget, /*width*/ 80)
             .contains("Chat stopped as a precaution")
     );
     assert_matches!(op_rx.try_recv(), Ok(Op::Interrupt));

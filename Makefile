@@ -101,6 +101,11 @@ codex: v8 ## Build only the codex CLI binary
 run: v8 ## Run the codex CLI with ARGS
 	$(CARGO_CMD) run --bin codex $(CARGO_FLAGS) -- $(ARGS)
 
+# Limit concurrent ThinLTO work on local macOS installs. An explicit
+# CARGO_BUILD_JOBS or --jobs in CARGO_FLAGS still takes precedence.
+ifeq ($(shell uname -s),Darwin)
+install: export CARGO_BUILD_JOBS ?= 2
+endif
 install: v8 ## Release-build codex into BINDIR and the app-server daemon (DAEMON=0 skips it)
 	$(CARGO_CMD) build --release $(foreach b,$(INSTALL_BINS),--bin $(b)) $(CARGO_FLAGS)
 	mkdir -p "$(BINDIR)"

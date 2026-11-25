@@ -12,6 +12,7 @@ use codex_core::TurnStartOptions;
 use codex_core::cyber_access_program::ContinuationCyberAccessProgram;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ThreadGoal;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
@@ -353,13 +354,21 @@ impl GoalRuntimeHandle {
             .await
     }
 
-    /// Keep an active goal eligible for idle continuation after server overload.
+    /// Keep an active goal eligible for idle continuation after a recoverable turn error.
     /// The failed turn remains terminal. The idle scheduler starts a fresh goal turn,
     /// using the same continuation path as an external goal resume.
-    pub(crate) async fn continue_after_server_overload(
+    pub(crate) async fn continue_after_recoverable_error(
         &self,
         turn_id: &str,
+        error: &CodexErrorInfo,
     ) -> Result<bool, String> {
+        let event_name = match error {
+            CodexErrorInfo::ServerOverloaded => "server-overloaded",
+            CodexErrorInfo::CyberPolicy
+            | CodexErrorInfo::BioPolicy
+            | CodexErrorInfo::MisalignmentPolicyViolation => "policy-error",
+            _ => return Ok(false),
+        };
         if !self.tools_available() {
             return Ok(false);
         }
@@ -386,7 +395,7 @@ impl GoalRuntimeHandle {
         }
         self.account_active_goal_progress(
             turn_id,
-            &format!("{turn_id}:server-overloaded-progress"),
+            &format!("{turn_id}:{event_name}-progress"),
             codex_state::GoalAccountingMode::ActiveOnly,
             BudgetLimitedGoalDisposition::ClearActive,
         )

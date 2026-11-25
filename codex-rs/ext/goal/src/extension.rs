@@ -425,12 +425,23 @@ where
                 return;
             };
 
-            if matches!(input.error, CodexErrorInfo::ServerOverloaded) {
-                match runtime.continue_after_server_overload(input.turn_id).await {
+            if matches!(
+                input.error,
+                CodexErrorInfo::CyberPolicy
+                    | CodexErrorInfo::BioPolicy
+                    | CodexErrorInfo::MisalignmentPolicyViolation
+                    | CodexErrorInfo::ServerOverloaded
+            ) {
+                match runtime
+                    .continue_after_recoverable_error(input.turn_id, &input.error)
+                    .await
+                {
                     Ok(true) => return,
                     Ok(false) => {}
                     Err(err) => {
-                        tracing::warn!("failed to continue goal after server overload: {err}")
+                        tracing::warn!(
+                            "failed to continue goal after recoverable turn error: {err}"
+                        )
                     }
                 }
             }

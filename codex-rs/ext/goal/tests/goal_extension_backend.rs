@@ -983,7 +983,7 @@ async fn server_overload_does_not_reactivate_stopped_goals() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn policy_errors_block_active_goals() -> anyhow::Result<()> {
+async fn policy_errors_leave_goal_active_for_fresh_turns() -> anyhow::Result<()> {
     use codex_protocol::error::CodexErrorDetails;
 
     for code in [
@@ -1004,23 +1004,84 @@ async fn policy_errors_block_active_goals() -> anyhow::Result<()> {
             ))
             .await?;
 
+        // Each terminal turn is accounted once, including duplicate error events.
+        for turn in 1..=5 {
+            let turn_id = format!("turn-{turn}");
+            if turn > 1 {
+                harness.start_turn(&turn_id, &TokenUsage::default()).await;
+            }
+            harness
+                .record_token_usage(&turn_id, &token_usage(10, 0, 5, 0, 15))
+                .await;
+            for _ in 0..2 {
+                let details = match code {
+                    "cyber_policy" => CodexErrorDetails::CyberPolicy {
+                        message: "rejected".into(),
+                    },
+                    "bio_policy" => CodexErrorDetails::BioPolicy {
+                        message: "rejected".into(),
+                    },
+                    _ => CodexErrorDetails::MisalignmentPolicyViolation {
+                        message: "rejected".into(),
+                        misalignment: None,
+                    },
+                };
+                harness
+                    .notify_turn_error(&turn_id, CodexErr::new(details))
+                    .await;
+            }
+            harness.stop_turn(&turn_id).await;
+            let goal = runtime
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await?
+                .unwrap();
+            assert_eq!(goal.tokens_used, i64::from(turn) * 15);
+            assert_eq!(goal.status, codex_state::ThreadGoalStatus::Active);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_error_continuation_respects_goal_budget() -> anyhow::Result<()> {
+    for code in [
+        "cyber_policy",
+        "bio_policy",
+        "misalignment_policy_violation",
+    ] {
+        let runtime = test_runtime().await?;
+        let thread_id = test_thread_id()?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+        harness.start_turn("turn-1", &TokenUsage::default()).await;
+        let tools = harness.tools();
+        tool_by_name(&tools, "create_goal")
+            .handle(tool_call(
+                "create_goal",
+                "create",
+                json!({"objective": "bounded continuation", "token_budget": 10}),
+            ))
+            .await?;
         harness
             .record_token_usage("turn-1", &token_usage(10, 0, 5, 0, 15))
             .await;
-        let details = match code {
-            "cyber_policy" => CodexErrorDetails::CyberPolicy {
-                message: "rejected".into(),
-            },
-            "bio_policy" => CodexErrorDetails::BioPolicy {
-                message: "rejected".into(),
-            },
-            _ => CodexErrorDetails::MisalignmentPolicyViolation {
-                message: "rejected".into(),
-                misalignment: None,
-            },
-        };
         harness
-            .notify_turn_error("turn-1", CodexErr::new(details))
+            .notify_turn_error(
+                "turn-1",
+                CodexErr::new(match code {
+                    "cyber_policy" => codex_protocol::error::CodexErrorDetails::CyberPolicy {
+                        message: "rejected".into(),
+                    },
+                    "bio_policy" => codex_protocol::error::CodexErrorDetails::BioPolicy {
+                        message: "rejected".into(),
+                    },
+                    _ => codex_protocol::error::CodexErrorDetails::MisalignmentPolicyViolation {
+                        message: "rejected".into(),
+                        misalignment: None,
+                    },
+                }),
+            )
             .await;
         harness.stop_turn("turn-1").await;
         let goal = runtime
@@ -1028,8 +1089,8 @@ async fn policy_errors_block_active_goals() -> anyhow::Result<()> {
             .get_thread_goal(thread_id)
             .await?
             .unwrap();
+        assert_eq!(goal.status, codex_state::ThreadGoalStatus::BudgetLimited);
         assert_eq!(goal.tokens_used, 15);
-        assert_eq!(goal.status, codex_state::ThreadGoalStatus::Blocked);
     }
     Ok(())
 }

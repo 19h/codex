@@ -296,10 +296,14 @@ impl ChatWidget {
                         && notification.error.codex_error_info
                             == Some(AppServerCodexErrorInfo::MisalignmentPolicyViolation)
                     {
-                        self.on_misalignment_error(
-                            Some(notification.turn_id),
-                            notification.error.misalignment,
-                        );
+                        if notification.error.misalignment.is_some()
+                            || !self.show_policy_retry_continuation()
+                        {
+                            self.on_misalignment_error(
+                                Some(notification.turn_id),
+                                notification.error.misalignment,
+                            );
+                        }
                     } else {
                         self.handle_non_retry_error(
                             notification.error.message,
@@ -586,10 +590,19 @@ impl ChatWidget {
                         && error.codex_error_info
                             == Some(AppServerCodexErrorInfo::MisalignmentPolicyViolation)
                     {
-                        self.on_misalignment_error(
-                            Some(notification.turn.id.clone()),
-                            error.misalignment,
-                        );
+                        if self.last_non_retry_error.as_ref()
+                            != Some(&(notification.turn.id.clone(), error.message.clone()))
+                            || self.has_misalignment_policy_violation()
+                        {
+                            if error.misalignment.is_some()
+                                || !self.show_policy_retry_continuation()
+                            {
+                                self.on_misalignment_error(
+                                    Some(notification.turn.id.clone()),
+                                    error.misalignment,
+                                );
+                            }
+                        }
                         self.last_non_retry_error = None;
                     } else if safety_recourse::render_failure(self, recourse, &error) {
                         self.last_non_retry_error = None;

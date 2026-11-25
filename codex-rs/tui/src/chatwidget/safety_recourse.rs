@@ -74,6 +74,17 @@ pub(super) fn render_failure(
     pending: Option<PendingRecourse>,
     error: &TurnError,
 ) -> bool {
+    if !chat.thread_usage.replaying_turn_completion {
+        return false;
+    }
+    render_failure_notice(chat, pending, error)
+}
+
+pub(super) fn render_failure_notice(
+    chat: &mut ChatWidget,
+    pending: Option<PendingRecourse>,
+    error: &TurnError,
+) -> bool {
     let Some(pending) = pending else {
         return false;
     };

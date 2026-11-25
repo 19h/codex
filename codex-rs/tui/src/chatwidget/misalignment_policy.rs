@@ -58,6 +58,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_misalignment_policy_violation(&mut self) {
+        if self.show_policy_retry_continuation() {
+            return;
+        }
         self.on_misalignment_error(/*turn_id*/ None, /*details*/ None);
     }
 

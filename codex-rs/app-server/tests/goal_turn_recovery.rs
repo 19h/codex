@@ -21,16 +21,27 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
+#[test_case::test_case("cyber_policy"; "cyber")]
+#[test_case::test_case("bio_policy"; "bio")]
+#[test_case::test_case("misalignment_policy_violation"; "misalignment")]
+#[test_case::test_case("server_is_overloaded"; "overload")]
 #[tokio::test]
-async fn overloaded_goal_turns_start_fresh_turns_until_completion() -> Result<()> {
-    const FAILURES: usize = 5;
-    let mut scripts: Vec<_> = (0..FAILURES)
+async fn rejected_goal_turns_start_fresh_turns_until_completion(code: &str) -> Result<()> {
+    const REJECTIONS: usize = 5;
+    let mut scripts: Vec<_> = (0..REJECTIONS)
         .map(|turn| {
+            let mut error = json!({ "code": code, "message": "test rejection" });
+            if code == "misalignment_policy_violation" {
+                error["misalignment"] = json!({
+                    "detailed_explanation": "test finding",
+                    "steer": { "message": "server-supplied acknowledgement text" },
+                });
+            }
             responses::sse(vec![json!({
                 "type": "response.failed",
                 "response": {
-                    "id": format!("overloaded-{turn}"),
-                    "error": { "code": "server_is_overloaded", "message": "test overload" },
+                    "id": format!("rejected-{turn}"),
+                    "error": error,
                 }
             })])
         })
@@ -65,15 +76,24 @@ async fn overloaded_goal_turns_start_fresh_turns_until_completion() -> Result<()
         .send_raw_request(
             "thread/goal/set",
             Some(json!({
-                "threadId": thread.id, "objective": "Finish after the overloaded turn"
+                "threadId": thread.id, "objective": "Finish after the rejected turn"
             })),
         )
         .await?;
     let _: ThreadGoalSetResponse = mcp.read_response(request).await?;
 
     let mut failed_turns = std::collections::HashSet::new();
-    // Only goal/set starts work. Each overload terminates a distinct turn.
-    for _ in 0..FAILURES {
+    let expected_error = match code {
+        "cyber_policy" => codex_app_server_protocol::CodexErrorInfo::CyberPolicy,
+        "bio_policy" => codex_app_server_protocol::CodexErrorInfo::BioPolicy,
+        "misalignment_policy_violation" => {
+            codex_app_server_protocol::CodexErrorInfo::MisalignmentPolicyViolation
+        }
+        _ => codex_app_server_protocol::CodexErrorInfo::ServerOverloaded,
+    };
+    // Only goal/set starts work. Every refusal terminates a distinct turn,
+    // followed by a host-submitted continuation without user RPCs.
+    for _ in 0..REJECTIONS {
         let completed: TurnCompletedNotification = timeout(
             Duration::from_secs(30),
             mcp.read_notification("turn/completed"),
@@ -85,9 +105,9 @@ async fn overloaded_goal_turns_start_fresh_turns_until_completion() -> Result<()
             completed
                 .turn
                 .error
-                .expect("overload remains visible")
+                .expect("refusal remains visible")
                 .codex_error_info,
-            Some(codex_app_server_protocol::CodexErrorInfo::ServerOverloaded),
+            Some(expected_error.clone()),
         );
     }
     let completed: TurnCompletedNotification = timeout(
@@ -107,15 +127,31 @@ async fn overloaded_goal_turns_start_fresh_turns_until_completion() -> Result<()
         }
     })
     .await??;
+    for request in server.received_requests().await.unwrap() {
+        // Ordinary continuation sends no acknowledgement/override metadata.
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(!body.contains("misalignment_override"));
+        assert!(!body.contains("server-supplied acknowledgement text"));
+    }
     server.verify().await;
     Ok(())
 }
 
-#[test_case::test_case(true, false; "overload_without_goal")]
-#[test_case::test_case(false, false; "overload_goals_disabled")]
-#[test_case::test_case(true, true; "overload_after_goal_completion")]
+#[test_case::test_case("cyber_policy", true, false; "cyber_without_goal")]
+#[test_case::test_case("cyber_policy", false, false; "cyber_goals_disabled")]
+#[test_case::test_case("cyber_policy", true, true; "cyber_after_goal_completion")]
+#[test_case::test_case("bio_policy", true, false; "bio_without_goal")]
+#[test_case::test_case("bio_policy", false, false; "bio_goals_disabled")]
+#[test_case::test_case("bio_policy", true, true; "bio_after_goal_completion")]
+#[test_case::test_case("misalignment_policy_violation", true, false; "misalignment_without_goal")]
+#[test_case::test_case("misalignment_policy_violation", false, false; "misalignment_goals_disabled")]
+#[test_case::test_case("misalignment_policy_violation", true, true; "misalignment_after_goal_completion")]
+#[test_case::test_case("server_is_overloaded", true, false; "overload_without_goal")]
+#[test_case::test_case("server_is_overloaded", false, false; "overload_goals_disabled")]
+#[test_case::test_case("server_is_overloaded", true, true; "overload_after_goal_completion")]
 #[tokio::test]
-async fn overloaded_turn_continues_unfinished_work_without_active_goal(
+async fn rejected_turn_continues_unfinished_work_without_active_goal(
+    code: &str,
     goals_enabled: bool,
     complete_goal: bool,
 ) -> Result<()> {
@@ -138,7 +174,7 @@ async fn overloaded_turn_continues_unfinished_work_without_active_goal(
             "type": "response.failed",
             "response": {
                 "id": format!("failed-{turn}"),
-                "error": { "code": "server_is_overloaded", "message": "test overload" }
+                "error": { "code": code, "message": "test rejection" }
             }
         })]));
     }
@@ -246,19 +282,12 @@ async fn overloaded_turn_continues_unfinished_work_without_active_goal(
     }
     let final_body: serde_json::Value = requests.last().unwrap().body_json()?;
     let final_input = final_body["input"].to_string();
-    assert!(final_input.contains("the server was overloaded"));
+    assert!(final_input.contains("Retry the request"));
     server.verify().await;
     Ok(())
 }
 
-#[test_case::test_case(None, "cyber_policy"; "cyber_without_goal")]
-#[test_case::test_case(None, "bio_policy"; "bio_without_goal")]
 #[test_case::test_case(None, "invalid_prompt"; "terminal_error_without_goal")]
-#[test_case::test_case(Some("paused"), "cyber_policy"; "paused_goal")]
-#[test_case::test_case(Some("blocked"), "server_is_overloaded"; "blocked_goal")]
-#[test_case::test_case(Some("paused"), "misalignment_policy_violation"; "paused_misalignment")]
-#[test_case::test_case(Some("blocked"), "misalignment_policy_violation"; "blocked_misalignment")]
-#[test_case::test_case(None, "misalignment_policy_violation"; "misalignment_without_goal")]
 #[tokio::test]
 async fn stopped_work_is_not_recovered(goal_status: Option<&str>, code: &str) -> Result<()> {
     let mut scripts = Vec::new();
